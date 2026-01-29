@@ -1,0 +1,215 @@
+        -:    0:Source:random.c
+        -:    0:Graph:random-random.gcno
+        -:    0:Data:random-random.gcda
+        -:    0:Runs:23
+        -:    1:#include "graph.h"
+        -:    2:#include <stdio.h>
+        -:    3:#include <stdlib.h>
+        -:    4:#include <unistd.h>
+        -:    5:#include <time.h>
+        -:    6:#include <getopt.h>
+        -:    7:
+        -:    8:extern char *optarg;
+        -:    9:
+        -:   10:/**
+        -:   11: * Print usage information and exit with error code 1.
+        -:   12: */
+        3:   13:static void print_usage_and_exit(const char *program_name)
+        -:   14:{
+        3:   15:    fprintf(stderr, "Usage: %s -v numOfVertices(int) -e numOfEdges(int) -r randomSeed(int)\n", program_name);
+        3:   16:    exit(1);
+        -:   17:}
+        -:   18:
+        -:   19:/**
+        -:   20: * Calculate maximum possible edges in a simple undirected graph with n vertices.
+        -:   21: * Formula: n*(n-1)/2 (no self-loops) or n*(n+1)/2 (with self-loops)
+        -:   22: * We'll use n*(n-1)/2 + n = n*(n+1)/2 to allow self-loops.
+        -:   23: */
+       17:   24:static unsigned long calculate_max_edges(int n)
+        -:   25:{
+       17:   26:    return (unsigned long)n * (n + 1) / 2;
+        -:   27:}
+        -:   28:
+        -:   29:/**
+        -:   30: * Generate a random graph by repeatedly trying to add random edges.
+        -:   31: * Uses rejection sampling - keeps trying until we get the desired number of edges.
+        -:   32: */
+       15:   33:static int generate_random_graph(Graph *g, int num_edges, int random_seed)
+        -:   34:{
+       15:   35:    if (!g)
+    #####:   36:        return -1;
+        -:   37:
+       15:   38:    srand((unsigned int)random_seed);
+       15:   39:    int edges_added = 0;
+       15:   40:    int max_attempts = num_edges * 1000; // Prevent infinite loops
+       15:   41:    int attempts = 0;
+        -:   42:
+      903:   43:    while (edges_added < num_edges && attempts < max_attempts)
+        -:   44:    {
+      888:   45:        int u = rand() % g->n;
+      888:   46:        int v = rand() % g->n;
+        -:   47:
+      888:   48:        int result = graph_add_edge(g, u, v);
+      888:   49:        if (result == 0)
+        -:   50:        {
+      437:   51:            edges_added++;
+      437:   52:            printf("Added edge: %d -- %d (total: %d/%d)\n", u, v, edges_added, num_edges);
+        -:   53:        }
+        -:   54:        // If result == -3 (duplicate), just try again
+        -:   55:        // If result == -1 or -2, that's an error
+      451:   56:        else if (result == -1 || result == -2)
+        -:   57:        {
+    #####:   58:            fprintf(stderr, "Error adding edge %d -- %d: %d\n", u, v, result);
+    #####:   59:            return -1;
+        -:   60:        }
+        -:   61:
+      888:   62:        attempts++;
+        -:   63:    }
+        -:   64:
+       15:   65:    if (edges_added < num_edges)
+        -:   66:    {
+    #####:   67:        fprintf(stderr, "Warning: Could only add %d out of %d requested edges after %d attempts\n",
+        -:   68:                edges_added, num_edges, attempts);
+    #####:   69:        return edges_added;
+        -:   70:    }
+        -:   71:
+       15:   72:    return edges_added;
+        -:   73:}
+        -:   74:
+       23:   75:int main(int argc, char *argv[])
+        -:   76:{
+        -:   77:    // Check if we have the right number of arguments
+       23:   78:    if (argc != 7)
+        -:   79:    { // program name + 6 arguments (-v val -e val -r val)
+        2:   80:        print_usage_and_exit(argv[0]);
+        -:   81:    }
+        -:   82:
+        -:   83:    int opt;
+       21:   84:    int num_vertices = -1;
+       21:   85:    int num_edges = -1;
+       21:   86:    int random_seed = -1;
+        -:   87:
+        -:   88:    // Parse command line options
+       83:   89:    while ((opt = getopt(argc, argv, "v:e:r:")) != -1)
+        -:   90:    {
+       63:   91:        switch (opt)
+        -:   92:        {
+       21:   93:        case 'v':
+       21:   94:            num_vertices = atoi(optarg);
+       21:   95:            break;
+       21:   96:        case 'e':
+       21:   97:            num_edges = atoi(optarg);
+       21:   98:            break;
+       20:   99:        case 'r':
+       20:  100:            random_seed = atoi(optarg);
+       20:  101:            break;
+        1:  102:        default:
+        1:  103:            print_usage_and_exit(argv[0]);
+        -:  104:        }
+        -:  105:    }
+        -:  106:
+        -:  107:    // Validate that all required parameters were provided
+       20:  108:    if (num_vertices == -1 || num_edges == -1 || random_seed == -1)
+        -:  109:    {
+    #####:  110:        fprintf(stderr, "Error: All parameters (-v, -e, -r) must be provided\n");
+    #####:  111:        print_usage_and_exit(argv[0]);
+        -:  112:    }
+        -:  113:
+        -:  114:    // Validate parameter ranges
+       20:  115:    if (num_vertices <= 0)
+        -:  116:    {
+        2:  117:        fprintf(stderr, "Error: Number of vertices must be positive (got %d)\n", num_vertices);
+        2:  118:        exit(1);
+        -:  119:    }
+        -:  120:
+       18:  121:    if (num_edges < 0)
+        -:  122:    {
+        1:  123:        fprintf(stderr, "Error: Number of edges must be non-negative (got %d)\n", num_edges);
+        1:  124:        exit(1);
+        -:  125:    }
+        -:  126:
+        -:  127:    // Check if the requested number of edges is feasible
+       17:  128:    unsigned long max_edges = calculate_max_edges(num_vertices);
+       17:  129:    if ((unsigned long)num_edges > max_edges)
+        -:  130:    {
+        2:  131:        fprintf(stderr, "Error: Too many edges requested\n");
+        2:  132:        fprintf(stderr, "Requested: %d edges, Maximum possible: %lu edges\n", num_edges, max_edges);
+        2:  133:        fprintf(stderr, "For %d vertices, maximum is %d*((%d+1)/2) = %lu\n",
+        -:  134:                num_vertices, num_vertices, num_vertices, max_edges);
+        2:  135:        exit(1);
+        -:  136:    }
+        -:  137:
+       15:  138:    printf("=== Random Graph Generation ===\n");
+       15:  139:    printf("Vertices: %d\n", num_vertices);
+       15:  140:    printf("Edges to generate: %d\n", num_edges);
+       15:  141:    printf("Random seed: %d\n", random_seed);
+       15:  142:    printf("Maximum possible edges: %lu\n\n", max_edges);
+        -:  143:
+        -:  144:    // Create the graph
+       15:  145:    Graph *g = graph_create(num_vertices);
+       15:  146:    if (!g)
+        -:  147:    {
+    #####:  148:        fprintf(stderr, "Error: Failed to create graph with %d vertices\n", num_vertices);
+    #####:  149:        exit(1);
+        -:  150:    }
+        -:  151:
+        -:  152:    // Generate random edges
+       15:  153:    printf("Generating random edges...\n");
+       15:  154:    int actual_edges = generate_random_graph(g, num_edges, random_seed);
+       15:  155:    if (actual_edges < 0)
+        -:  156:    {
+    #####:  157:        fprintf(stderr, "Error: Failed to generate random graph\n");
+    #####:  158:        graph_destroy(g);
+    #####:  159:        exit(1);
+        -:  160:    }
+        -:  161:
+       15:  162:    printf("\n=== Generated Graph ===\n");
+       15:  163:    graph_print(g);
+        -:  164:
+        -:  165:    // Check for Euler circuit
+       15:  166:    printf("\n=== Euler Circuit Analysis ===\n");
+       15:  167:    if (!graph_has_euler_circuit(g))
+        -:  168:    {
+       13:  169:        printf("No Euler circuit exists in this graph.\n");
+       13:  170:        printf("(Either the graph is not connected, or some vertices have odd degree)\n");
+        -:  171:    }
+        -:  172:    else
+        -:  173:    {
+        2:  174:        printf("Euler circuit exists! Finding it...\n\n");
+        -:  175:
+        2:  176:        int *cycle = NULL;
+        2:  177:        int cycle_length = 0;
+        -:  178:
+        2:  179:        if (graph_find_euler_circuit(g, &cycle, &cycle_length))
+        -:  180:        {
+        2:  181:            printf("=== Euler Circuit Found ===\n");
+        2:  182:            printf("Circuit length (vertices): %d\n", cycle_length);
+        2:  183:            printf("The circuit is:\n");
+        -:  184:
+       11:  185:            for (int i = 0; i < cycle_length; i++)
+        -:  186:            {
+        9:  187:                if (i == cycle_length - 1)
+        -:  188:                {
+        2:  189:                    printf("%d\n", cycle[i]);
+        -:  190:                }
+        -:  191:                else
+        -:  192:                {
+        7:  193:                    printf("%d -> ", cycle[i]);
+        -:  194:                    
+        -:  195:                }
+        -:  196:            }
+        -:  197:
+        2:  198:            free(cycle);
+        -:  199:        }
+        -:  200:        else
+        -:  201:        {
+    #####:  202:            printf("Error: Failed to extract Euler circuit (unexpected)\n");
+        -:  203:        }
+        -:  204:    }
+        -:  205:
+        -:  206:    // Clean up
+       15:  207:    graph_destroy(g);
+       15:  208:    printf("\nDone!\n");
+        -:  209:
+       15:  210:    return 0;
+        -:  211:}

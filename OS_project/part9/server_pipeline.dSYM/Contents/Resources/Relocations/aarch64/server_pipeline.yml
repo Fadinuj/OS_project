@@ -1,0 +1,5 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     '../part9/server_pipeline'
+relocations:     []
+...
