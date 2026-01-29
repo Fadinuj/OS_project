@@ -1,0 +1,173 @@
+        -:    0:Source:client.c
+        -:    0:Graph:./client.gcno
+        -:    0:Data:./client.gcda
+        -:    0:Runs:8
+        -:    1:/*
+        -:    2:** client.c -- simple C client for pipeline server (binary protocol)
+        -:    3:*/
+        -:    4:
+        -:    5:#define _POSIX_C_SOURCE 200112L
+        -:    6:#include <stdio.h>
+        -:    7:#include <stdlib.h>
+        -:    8:#include <unistd.h>
+        -:    9:#include <errno.h>
+        -:   10:#include <string.h>
+        -:   11:#include <netdb.h>
+        -:   12:#include <sys/types.h>
+        -:   13:#include <netinet/in.h>
+        -:   14:#include <sys/socket.h>
+        -:   15:#include <arpa/inet.h>
+        -:   16:#include <time.h>
+        -:   17:
+        -:   18:#define PORT "3490"      // port server is listening on
+        -:   19:#define MAXDATASIZE 4096 // max bytes to receive
+        -:   20:
+        -:   21:// get sockaddr, IPv4 or IPv6:
+        8:   22:void *get_in_addr(struct sockaddr *sa) {
+        8:   23:    if (sa->sa_family == AF_INET)
+        8:   24:        return &(((struct sockaddr_in*)sa)->sin_addr);
+    #####:   25:    return &(((struct sockaddr_in6*)sa)->sin6_addr);
+        -:   26:}
+        -:   27:
+        8:   28:int main(int argc, char *argv[]) {
+        -:   29:    int sockfd, rv;
+        -:   30:    char s[INET6_ADDRSTRLEN];
+        -:   31:    struct addrinfo hints, *servinfo, *p;
+        -:   32:
+        8:   33:    int seed = time(NULL);
+        8:   34:    int mode = -1; // 0=manual, 1=random
+        8:   35:    int vertices = 0, edges = 0, max_weight = 10;
+        -:   36:
+        -:   37:    int opt;
+       32:   38:    while ((opt = getopt(argc, argv, "rmn:e:w:s:")) != -1) {
+       24:   39:        switch (opt) {
+        8:   40:            case 'r': mode = 1; break;
+    #####:   41:            case 'm': mode = 0; break;
+        8:   42:            case 'n': vertices = atoi(optarg); break;
+        8:   43:            case 'e': edges = atoi(optarg); break;
+    #####:   44:            case 'w': max_weight = atoi(optarg); break;
+    #####:   45:            case 's': seed = atoi(optarg); break;
+    #####:   46:            default:
+    #####:   47:                fprintf(stderr,
+        -:   48:                    "Usage: %s [-r|-m] -n <vertices> -e <edges> [-w <max_weight>] [-s <seed>]\n",
+        -:   49:                    argv[0]);
+    #####:   50:                return 1;
+        -:   51:        }
+        -:   52:    }
+        -:   53:
+        8:   54:    if (mode == -1 || vertices <= 0 || (mode == 1 && edges <= 0)) {
+    #####:   55:        fprintf(stderr,
+        -:   56:            "Usage: %s [-r|-m] -n <vertices> -e <edges> [-w <max_weight>] [-s <seed>]\n",
+        -:   57:            argv[0]);
+    #####:   58:        return 1;
+        -:   59:    }
+        -:   60:
+        8:   61:    memset(&hints, 0, sizeof hints);
+        8:   62:    hints.ai_family = AF_UNSPEC;
+        8:   63:    hints.ai_socktype = SOCK_STREAM;
+        -:   64:
+        8:   65:    if ((rv = getaddrinfo("127.0.0.1", PORT, &hints, &servinfo)) != 0) {
+    #####:   66:        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+    #####:   67:        return 1;
+        -:   68:    }
+        -:   69:
+       8*:   70:    for(p = servinfo; p != NULL; p = p->ai_next) {
+       8*:   71:        if ((sockfd = socket(p->ai_family, p->ai_socktype,
+        -:   72:                p->ai_protocol)) == -1) {
+    #####:   73:            perror("client: socket");
+    #####:   74:            continue;
+        -:   75:        }
+        -:   76:
+       8*:   77:        if (connect(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
+    #####:   78:            perror("client: connect");
+    #####:   79:            close(sockfd);
+    #####:   80:            continue;
+        -:   81:        }
+        8:   82:        break;
+        -:   83:    }
+        -:   84:
+        8:   85:    if (p == NULL) {
+    #####:   86:        fprintf(stderr, "client: failed to connect\n");
+    #####:   87:        return 2;
+        -:   88:    }
+        -:   89:
+        8:   90:    inet_ntop(p->ai_family, get_in_addr((struct sockaddr *)p->ai_addr),
+        -:   91:              s, sizeof s);
+        8:   92:    printf("client: connected to %s\n", s);
+        -:   93:
+        8:   94:    freeaddrinfo(servinfo);
+        -:   95:
+        -:   96:    // === Send header ===
+        -:   97:    // header[0] = seed
+        -:   98:    // header[1] = max_weight (אפשר לשנות בעתיד אם תרצה)
+        -:   99:    // header[2] = מספר הצמתים
+        -:  100:    int header[3];
+        8:  101:    header[0] = seed;
+        8:  102:    header[1] = max_weight;
+        8:  103:    header[2] = vertices;
+        -:  104:
+        8:  105:    if (send(sockfd, header, sizeof(header), 0) == -1) {
+    #####:  106:        perror("send header");
+    #####:  107:        close(sockfd);
+    #####:  108:        return 1;
+        -:  109:    }
+        -:  110:
+        -:  111:    // === Send edges ===
+        8:  112:    int (*edges_arr)[3] = malloc(edges * sizeof(int[3]));
+        8:  113:    if (!edges_arr) {
+    #####:  114:        perror("malloc");
+    #####:  115:        close(sockfd);
+    #####:  116:        return 1;
+        -:  117:    }
+        -:  118:
+        8:  119:    if (mode == 1) {
+        8:  120:        srand(seed);
+        8:  121:        int generated = 0;
+       95:  122:        while (generated < edges) {
+       87:  123:            int u = rand() % vertices;
+       87:  124:            int v = rand() % vertices;
+       87:  125:            if (u == v) continue; // no self-loops
+       80:  126:            int w = (rand() % max_weight) + 1;
+       80:  127:            edges_arr[generated][0] = u;
+       80:  128:            edges_arr[generated][1] = v;
+       80:  129:            edges_arr[generated][2] = w;
+       80:  130:            generated++;
+        -:  131:        }
+        -:  132:    } else {
+    #####:  133:        for (int i = 0; i < edges; i++) {
+        -:  134:            int u,v,w;
+    #####:  135:            printf("Enter edge %d (u v w): ", i+1);
+    #####:  136:            if (scanf("%d %d %d",&u,&v,&w)!=3) {
+    #####:  137:                fprintf(stderr,"Invalid input\n");
+    #####:  138:                free(edges_arr);
+    #####:  139:                close(sockfd);
+    #####:  140:                return 1;
+        -:  141:            }
+    #####:  142:            edges_arr[i][0] = u;
+    #####:  143:            edges_arr[i][1] = v;
+    #####:  144:            edges_arr[i][2] = w;
+        -:  145:        }
+        -:  146:    }
+        -:  147:
+        8:  148:    if (send(sockfd, edges_arr, edges * sizeof(int[3]), 0) == -1) {
+    #####:  149:        perror("send edges");
+    #####:  150:        free(edges_arr);
+    #####:  151:        close(sockfd);
+    #####:  152:        return 1;
+        -:  153:    }
+        -:  154:
+        8:  155:    free(edges_arr);
+        -:  156:
+        -:  157:    // === Receive reply ===
+        -:  158:    char result[MAXDATASIZE];
+        8:  159:    int numbytes = recv(sockfd, result, sizeof(result)-1, 0);
+        8:  160:    if (numbytes > 0) {
+        8:  161:        result[numbytes] = '\0';
+        8:  162:        printf("Result from server:\n%s\n", result);
+        -:  163:    } else {
+    #####:  164:        printf("No reply from server.\n");
+        -:  165:    }
+        -:  166:
+        8:  167:    close(sockfd);
+        8:  168:    return 0;
+        -:  169:}

@@ -1,0 +1,336 @@
+        -:    0:Source:../part7/mst.c
+        -:    0:Graph:../part7/mst.gcno
+        -:    0:Data:../part7/mst.gcda
+        -:    0:Runs:2
+        -:    1:#include "mst.h"
+        -:    2:#include <stdio.h>
+        -:    3:#include <stdlib.h>
+        -:    4:#include <string.h>
+        -:    5:#include <limits.h>
+        -:    6:
+        -:    7:/**
+        -:    8: * Priority Queue implementation for Prim's algorithm
+        -:    9: * Min-heap storing {weight, vertex} pairs
+        -:   10: */
+        -:   11:typedef struct {
+        -:   12:    int weight;
+        -:   13:    int vertex;
+        -:   14:} PQ_Node;
+        -:   15:
+        -:   16:typedef struct {
+        -:   17:    PQ_Node* data;
+        -:   18:    int size;
+        -:   19:    int capacity;
+        -:   20:} PriorityQueue;
+        -:   21:
+    #####:   22:static PriorityQueue* pq_create(int capacity) {
+    #####:   23:    PriorityQueue* pq = (PriorityQueue*)malloc(sizeof(PriorityQueue));
+    #####:   24:    if (!pq) return NULL;
+        -:   25:    
+    #####:   26:    pq->data = (PQ_Node*)malloc(sizeof(PQ_Node) * capacity);
+    #####:   27:    if (!pq->data) {
+    #####:   28:        free(pq);
+    #####:   29:        return NULL;
+        -:   30:    }
+        -:   31:    
+    #####:   32:    pq->size = 0;
+    #####:   33:    pq->capacity = capacity;
+    #####:   34:    return pq;
+        -:   35:}
+        -:   36:
+    #####:   37:static void pq_destroy(PriorityQueue* pq) {
+    #####:   38:    if (pq) {
+    #####:   39:        free(pq->data);
+    #####:   40:        free(pq);
+        -:   41:    }
+    #####:   42:}
+        -:   43:
+    #####:   44:static void pq_swap(PQ_Node* a, PQ_Node* b) {
+    #####:   45:    PQ_Node temp = *a;
+    #####:   46:    *a = *b;
+    #####:   47:    *b = temp;
+    #####:   48:}
+        -:   49:
+    #####:   50:static void pq_heapify_up(PriorityQueue* pq, int index) {
+    #####:   51:    while (index > 0) {
+    #####:   52:        int parent = (index - 1) / 2;
+    #####:   53:        if (pq->data[index].weight >= pq->data[parent].weight) break;
+        -:   54:        
+    #####:   55:        pq_swap(&pq->data[index], &pq->data[parent]);
+    #####:   56:        index = parent;
+        -:   57:    }
+    #####:   58:}
+        -:   59:
+    #####:   60:static void pq_heapify_down(PriorityQueue* pq, int index) {
+    #####:   61:    while (1) {
+    #####:   62:        int smallest = index;
+    #####:   63:        int left = 2 * index + 1;
+    #####:   64:        int right = 2 * index + 2;
+        -:   65:        
+    #####:   66:        if (left < pq->size && pq->data[left].weight < pq->data[smallest].weight) {
+    #####:   67:            smallest = left;
+        -:   68:        }
+        -:   69:        
+    #####:   70:        if (right < pq->size && pq->data[right].weight < pq->data[smallest].weight) {
+    #####:   71:            smallest = right;
+        -:   72:        }
+        -:   73:        
+    #####:   74:        if (smallest == index) break;
+        -:   75:        
+    #####:   76:        pq_swap(&pq->data[index], &pq->data[smallest]);
+    #####:   77:        index = smallest;
+        -:   78:    }
+    #####:   79:}
+        -:   80:
+    #####:   81:static int pq_push(PriorityQueue* pq, int weight, int vertex) {
+    #####:   82:    if (pq->size >= pq->capacity) return 0; // Queue full
+        -:   83:    
+    #####:   84:    pq->data[pq->size].weight = weight;
+    #####:   85:    pq->data[pq->size].vertex = vertex;
+    #####:   86:    pq_heapify_up(pq, pq->size);
+    #####:   87:    pq->size++;
+    #####:   88:    return 1;
+        -:   89:}
+        -:   90:
+    #####:   91:static PQ_Node pq_pop(PriorityQueue* pq) {
+    #####:   92:    PQ_Node result = pq->data[0];
+    #####:   93:    pq->size--;
+    #####:   94:    if (pq->size > 0) {
+    #####:   95:        pq->data[0] = pq->data[pq->size];
+    #####:   96:        pq_heapify_down(pq, 0);
+        -:   97:    }
+    #####:   98:    return result;
+        -:   99:}
+        -:  100:
+    #####:  101:static int pq_is_empty(const PriorityQueue* pq) {
+    #####:  102:    return pq->size == 0;
+        -:  103:}
+        -:  104:
+        -:  105:/**
+        -:  106: * Build weight matrix from adjacency list using actual edge weights.
+        -:  107: * Now supports real weights from the graph structure.
+        -:  108: */
+    #####:  109:static int build_weight_matrix(const Graph* g, int** weight_matrix) {
+    #####:  110:    int n = g->n;
+        -:  111:    
+        -:  112:    // Initialize matrix to 0 (no edge)
+    #####:  113:    for (int i = 0; i < n; i++) {
+    #####:  114:        for (int j = 0; j < n; j++) {
+    #####:  115:            weight_matrix[i][j] = 0;
+        -:  116:        }
+        -:  117:    }
+        -:  118:    
+        -:  119:    // Fill weight matrix from adjacency lists with actual weights
+    #####:  120:    for (int u = 0; u < n; u++) {
+    #####:  121:        for (EdgeNode* edge = g->adj[u].head; edge; edge = edge->next) {
+    #####:  122:            int v = edge->to;
+    #####:  123:            if (u != v) { // Skip self-loops
+    #####:  124:                weight_matrix[u][v] = edge->weight; // Use actual edge weight!
+        -:  125:            }
+        -:  126:        }
+        -:  127:    }
+        -:  128:    
+    #####:  129:    return 1;
+        -:  130:}
+        -:  131:
+        -:  132:/**
+        -:  133: * Calculate minimum spanning tree using Prim's algorithm.
+        -:  134: * Now properly handles weighted graphs.
+        -:  135: */
+    #####:  136:int graph_mst_prim(const Graph* g, MST_Result* result) {
+    #####:  137:    if (!g || !result || g->n < 1) return 0;
+        -:  138:    
+    #####:  139:    int n = g->n;
+        -:  140:    
+        -:  141:    // Initialize result
+    #####:  142:    result->edges = NULL;
+    #####:  143:    result->num_edges = 0;
+    #####:  144:    result->total_weight = 0;
+    #####:  145:    result->is_connected = 0;
+        -:  146:    
+    #####:  147:    if (n == 1) {
+    #####:  148:        result->is_connected = 1; // Single vertex is trivially connected
+    #####:  149:        return 1;
+        -:  150:    }
+        -:  151:    
+        -:  152:    // Allocate weight matrix
+    #####:  153:    int** weight_matrix = (int**)malloc(n * sizeof(int*));
+    #####:  154:    if (!weight_matrix) return 0;
+        -:  155:    
+    #####:  156:    for (int i = 0; i < n; i++) {
+    #####:  157:        weight_matrix[i] = (int*)malloc(n * sizeof(int));
+    #####:  158:        if (!weight_matrix[i]) {
+    #####:  159:            for (int j = 0; j < i; j++) free(weight_matrix[j]);
+    #####:  160:            free(weight_matrix);
+    #####:  161:            return 0;
+        -:  162:        }
+        -:  163:    }
+        -:  164:    
+        -:  165:    // Build weight matrix with actual edge weights
+    #####:  166:    build_weight_matrix(g, weight_matrix);
+        -:  167:    
+        -:  168:    // Prim's algorithm variables
+    #####:  169:    int* in_mst = (int*)calloc(n, sizeof(int));
+    #####:  170:    int* key = (int*)malloc(n * sizeof(int));
+    #####:  171:    int* parent = (int*)malloc(n * sizeof(int));
+        -:  172:    
+    #####:  173:    if (!in_mst || !key || !parent) {
+    #####:  174:        free(in_mst); free(key); free(parent);
+    #####:  175:        for (int i = 0; i < n; i++) free(weight_matrix[i]);
+    #####:  176:        free(weight_matrix);
+    #####:  177:        return 0;
+        -:  178:    }
+        -:  179:    
+        -:  180:    // Initialize arrays
+    #####:  181:    for (int i = 0; i < n; i++) {
+    #####:  182:        key[i] = INT_MAX;
+    #####:  183:        parent[i] = -1;
+        -:  184:    }
+    #####:  185:    key[0] = 0; // Start from vertex 0
+        -:  186:    
+    #####:  187:    PriorityQueue* pq = pq_create(n * n); // Generous capacity
+    #####:  188:    if (!pq) {
+    #####:  189:        free(in_mst); free(key); free(parent);
+    #####:  190:        for (int i = 0; i < n; i++) free(weight_matrix[i]);
+    #####:  191:        free(weight_matrix);
+    #####:  192:        return 0;
+        -:  193:    }
+        -:  194:    
+    #####:  195:    pq_push(pq, 0, 0); // {weight=0, vertex=0}
+        -:  196:    
+        -:  197:    // Prim's main loop
+    #####:  198:    while (!pq_is_empty(pq)) {
+    #####:  199:        PQ_Node current = pq_pop(pq);
+    #####:  200:        int u = current.vertex;
+        -:  201:        
+    #####:  202:        if (in_mst[u]) continue; // Already in MST
+        -:  203:        
+    #####:  204:        in_mst[u] = 1;
+        -:  205:        
+        -:  206:        // Update keys of adjacent vertices using actual edge weights
+    #####:  207:        for (int v = 0; v < n; v++) {
+    #####:  208:            int weight = weight_matrix[u][v];
+    #####:  209:            if (weight > 0 && !in_mst[v] && weight < key[v]) {
+    #####:  210:                key[v] = weight;
+    #####:  211:                parent[v] = u;
+    #####:  212:                pq_push(pq, weight, v);
+        -:  213:            }
+        -:  214:        }
+        -:  215:    }
+        -:  216:    
+        -:  217:    // Check if all vertices are reachable (graph is connected)
+    #####:  218:    int vertices_in_mst = 0;
+    #####:  219:    for (int i = 0; i < n; i++) {
+    #####:  220:        if (in_mst[i]) vertices_in_mst++;
+        -:  221:    }
+        -:  222:    
+    #####:  223:    if (vertices_in_mst != n) {
+        -:  224:        // Graph is not connected
+    #####:  225:        result->is_connected = 0;
+    #####:  226:        pq_destroy(pq);
+    #####:  227:        free(in_mst); free(key); free(parent);
+    #####:  228:        for (int i = 0; i < n; i++) free(weight_matrix[i]);
+    #####:  229:        free(weight_matrix);
+    #####:  230:        return 1; // Success, but no spanning tree
+        -:  231:    }
+        -:  232:    
+    #####:  233:    result->is_connected = 1;
+        -:  234:    
+        -:  235:    // Build MST edges array
+    #####:  236:    result->edges = (MST_Edge*)malloc((n-1) * sizeof(MST_Edge));
+    #####:  237:    if (!result->edges) {
+    #####:  238:        pq_destroy(pq);
+    #####:  239:        free(in_mst); free(key); free(parent);
+    #####:  240:        for (int i = 0; i < n; i++) free(weight_matrix[i]);
+    #####:  241:        free(weight_matrix);
+    #####:  242:        return 0;
+        -:  243:    }
+        -:  244:    
+    #####:  245:    int edge_count = 0;
+    #####:  246:    int total_weight = 0;
+        -:  247:    
+    #####:  248:    for (int v = 1; v < n; v++) { // Skip vertex 0 (root)
+    #####:  249:        if (parent[v] != -1) {
+    #####:  250:            result->edges[edge_count].u = parent[v];
+    #####:  251:            result->edges[edge_count].v = v;
+    #####:  252:            result->edges[edge_count].weight = weight_matrix[parent[v]][v];
+    #####:  253:            total_weight += weight_matrix[parent[v]][v];
+    #####:  254:            edge_count++;
+        -:  255:        }
+        -:  256:    }
+        -:  257:    
+    #####:  258:    result->num_edges = edge_count;
+    #####:  259:    result->total_weight = total_weight;
+        -:  260:    
+        -:  261:    // Cleanup
+    #####:  262:    pq_destroy(pq);
+    #####:  263:    free(in_mst); free(key); free(parent);
+    #####:  264:    for (int i = 0; i < n; i++) free(weight_matrix[i]);
+    #####:  265:    free(weight_matrix);
+        -:  266:    
+    #####:  267:    return 1;
+        -:  268:}
+        -:  269:
+        -:  270:/**
+        -:  271: * Print MST result in a formatted way.
+        -:  272: */
+    #####:  273:void graph_print_mst(const Graph* g) {
+    #####:  274:    if (!g) {
+    #####:  275:        printf("Error: NULL graph\n");
+    #####:  276:        return;
+        -:  277:    }
+        -:  278:    
+        -:  279:    MST_Result result;
+    #####:  280:    if (!graph_mst_prim(g, &result)) {
+    #####:  281:        printf("Error: Failed to calculate MST\n");
+    #####:  282:        return;
+        -:  283:    }
+        -:  284:    
+    #####:  285:    if (!result.is_connected) {
+    #####:  286:        printf("Graph is not connected - no spanning tree exists\n");
+    #####:  287:        return;
+        -:  288:    }
+        -:  289:    
+    #####:  290:    printf("Minimum Spanning Tree:\n");
+    #####:  291:    printf("Total weight: %d\n", result.total_weight);
+    #####:  292:    printf("Edges in MST:\n");
+        -:  293:    
+    #####:  294:    for (int i = 0; i < result.num_edges; i++) {
+    #####:  295:        printf("  %d -- %d (weight: %d)\n", 
+    #####:  296:               result.edges[i].u, result.edges[i].v, result.edges[i].weight);
+        -:  297:    }
+        -:  298:    
+    #####:  299:    mst_result_free(&result);
+        -:  300:}
+        -:  301:
+        -:  302:/**
+        -:  303: * Free MST result memory.
+        -:  304: */
+    #####:  305:void mst_result_free(MST_Result* result) {
+    #####:  306:    if (result && result->edges) {
+    #####:  307:        free(result->edges);
+    #####:  308:        result->edges = NULL;
+    #####:  309:        result->num_edges = 0;
+        -:  310:    }
+    #####:  311:}
+        -:  312:
+        -:  313:/**
+        -:  314: * Get MST total weight only (simpler interface).
+        -:  315: */
+    #####:  316:int graph_mst_weight(const Graph* g, int* total_weight) {
+    #####:  317:    if (!g || !total_weight) return 0;
+        -:  318:    
+        -:  319:    MST_Result result;
+    #####:  320:    if (!graph_mst_prim(g, &result)) {
+    #####:  321:        return 0;
+        -:  322:    }
+        -:  323:    
+    #####:  324:    if (!result.is_connected) {
+    #####:  325:        mst_result_free(&result);
+    #####:  326:        return 0;
+        -:  327:    }
+        -:  328:    
+    #####:  329:    *total_weight = result.total_weight;
+    #####:  330:    mst_result_free(&result);
+    #####:  331:    return 1;
+        -:  332:}

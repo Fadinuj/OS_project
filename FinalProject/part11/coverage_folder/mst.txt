@@ -1,0 +1,5 @@
+File '../part7/mst.c'
+Lines executed:0.00% of 183
+Creating 'mst.c.gcov'
+
+Lines executed:0.00% of 183
