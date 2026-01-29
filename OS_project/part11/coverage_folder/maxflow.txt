@@ -1,5 +1,0 @@
-File '../part7/maxflow.c'
-Lines executed:0.00% of 131
-Creating 'maxflow.c.gcov'
-
-Lines executed:0.00% of 131

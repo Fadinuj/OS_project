@@ -1,5 +1,0 @@
-File '../part7/cliquecount.c'
-Lines executed:0.00% of 179
-Creating 'cliquecount.c.gcov'
-
-Lines executed:0.00% of 179

@@ -1,5 +1,0 @@
-File 'server_pipeline.c'
-Lines executed:21.76% of 216
-Creating 'server_pipeline.c.gcov'
-
-Lines executed:21.76% of 216
