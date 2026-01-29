@@ -1,0 +1,5 @@
+File '../part7/maxclique.c'
+Lines executed:0.00% of 218
+Creating 'maxclique.c.gcov'
+
+Lines executed:0.00% of 218

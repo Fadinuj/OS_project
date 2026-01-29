@@ -1,0 +1,460 @@
+        -:    0:Source:server_pipeline.c
+        -:    0:Graph:./server_pipeline.gcno
+        -:    0:Data:./server_pipeline.gcda
+        -:    0:Runs:2
+        -:    1:#include <stdio.h>
+        -:    2:#include <stdlib.h>
+        -:    3:#include <string.h>
+        -:    4:#include <unistd.h>
+        -:    5:#include <pthread.h>
+        -:    6:#include <arpa/inet.h>
+        -:    7:#include <errno.h>
+        -:    8:#include <signal.h>
+        -:    9:#include <time.h>
+        -:   10:
+        -:   11:// Include part 7 headers
+        -:   12:#include "../part7/graph.h"
+        -:   13:#include "../part7/mst.h"
+        -:   14:#include "../part7/maxflow.h"
+        -:   15:#include "../part7/maxclique.h"
+        -:   16:#include "../part7/cliquecount.h"
+        -:   17:
+        -:   18:#define PORT 3490
+        -:   19:#define BACKLOG 10
+        -:   20:#define MAX_QUEUE 32
+        -:   21:#define MAX_EDGES 1000
+        -:   22:
+        -:   23:// === Job Structure ===
+        -:   24:typedef struct {
+        -:   25:    int job_id;
+        -:   26:    Graph *graph;
+        -:   27:    int client_sock;
+        -:   28:    time_t start_time;
+        -:   29:    
+        -:   30:    // Results from each stage
+        -:   31:    char mst_result[256];
+        -:   32:    char maxflow_result[256];
+        -:   33:    char maxclique_result[256];
+        -:   34:    char cliquecount_result[256];
+        -:   35:    
+        -:   36:    char final_response[2048];
+        -:   37:} Job;
+        -:   38:
+        -:   39:// === Thread-Safe Blocking Queue ===
+        -:   40:typedef struct {
+        -:   41:    Job* queue[MAX_QUEUE];
+        -:   42:    int head, tail, count;
+        -:   43:    pthread_mutex_t mutex;
+        -:   44:    pthread_cond_t not_empty, not_full;
+        -:   45:    char name[32];
+        -:   46:} BlockingQueue;
+        -:   47:
+        -:   48:// === Pipeline Stages (Queues) ===
+        -:   49:BlockingQueue stage1_queue; // MST
+        -:   50:BlockingQueue stage2_queue; // MaxFlow
+        -:   51:BlockingQueue stage3_queue; // MaxClique
+        -:   52:BlockingQueue stage4_queue; // CliqueCount
+        -:   53:
+        -:   54:// === Global State ===
+        -:   55:volatile int shutdown_flag = 0;
+        -:   56:static int next_job_id = 1;
+        -:   57:pthread_mutex_t job_id_mutex = PTHREAD_MUTEX_INITIALIZER;
+        -:   58:
+        -:   59:// === Queue Management Functions ===
+        8:   60:void queue_init(BlockingQueue *q, const char* name) {
+        8:   61:    q->head = q->tail = q->count = 0;
+        8:   62:    pthread_mutex_init(&q->mutex, NULL);
+        8:   63:    pthread_cond_init(&q->not_empty, NULL);
+        8:   64:    pthread_cond_init(&q->not_full, NULL);
+        8:   65:    strncpy(q->name, name, sizeof(q->name) - 1);
+        8:   66:    printf("[Pipeline] Initialized queue: %s\n", q->name);
+        8:   67:}
+        -:   68:
+    #####:   69:void queue_push(BlockingQueue *q, Job *job) {
+    #####:   70:    pthread_mutex_lock(&q->mutex);
+        -:   71:    
+    #####:   72:    while (q->count == MAX_QUEUE && !shutdown_flag) {
+    #####:   73:        pthread_cond_wait(&q->not_full, &q->mutex);
+        -:   74:    }
+        -:   75:    
+    #####:   76:    if (shutdown_flag) {
+    #####:   77:        pthread_mutex_unlock(&q->mutex);
+    #####:   78:        return;
+        -:   79:    }
+        -:   80:    
+    #####:   81:    q->queue[q->tail] = job;
+    #####:   82:    q->tail = (q->tail + 1) % MAX_QUEUE;
+    #####:   83:    q->count++;
+        -:   84:    
+    #####:   85:    printf("[Pipeline] Job %d added to %s (queue size: %d)\n", 
+    #####:   86:           job->job_id, q->name, q->count);
+        -:   87:    
+    #####:   88:    pthread_cond_signal(&q->not_empty);
+    #####:   89:    pthread_mutex_unlock(&q->mutex);
+        -:   90:}
+        -:   91:
+        2:   92:Job* queue_pop(BlockingQueue *q) {
+        2:   93:    pthread_mutex_lock(&q->mutex);
+        -:   94:    
+        2:   95:    while (q->count == 0 && !shutdown_flag) {
+        2:   96:        pthread_cond_wait(&q->not_empty, &q->mutex);
+        -:   97:    }
+        -:   98:    
+    #####:   99:    if (shutdown_flag) {
+    #####:  100:        pthread_mutex_unlock(&q->mutex);
+    #####:  101:        return NULL;
+        -:  102:    }
+        -:  103:    
+    #####:  104:    Job* job = q->queue[q->head];
+    #####:  105:    q->head = (q->head + 1) % MAX_QUEUE;
+    #####:  106:    q->count--;
+        -:  107:    
+    #####:  108:    printf("[Pipeline] Job %d removed from %s (queue size: %d)\n", 
+    #####:  109:           job->job_id, q->name, q->count);
+        -:  110:    
+    #####:  111:    pthread_cond_signal(&q->not_full);
+    #####:  112:    pthread_mutex_unlock(&q->mutex);
+    #####:  113:    return job;
+        -:  114:}
+        -:  115:
+        -:  116:// === Stage 1: MST Computation ===
+        1:  117:void* stage1_mst_worker(void *arg) {
+        1:  118:    printf("[Stage 1] MST worker started\n");
+        -:  119:    
+        1:  120:    while (!shutdown_flag) {
+        1:  121:        Job* job = queue_pop(&stage1_queue);
+    #####:  122:        if (!job) continue;
+        -:  123:        
+    #####:  124:        printf("[Stage 1] Processing Job %d - MST Algorithm\n", job->job_id);
+        -:  125:        
+        -:  126:        MST_Result mst_result;
+    #####:  127:        int success = graph_mst_prim(job->graph, &mst_result);
+        -:  128:        
+    #####:  129:        if (success && mst_result.is_connected) {
+    #####:  130:            snprintf(job->mst_result, sizeof(job->mst_result),
+        -:  131:                     "MST: Weight=%d, Edges=%d", 
+        -:  132:                     mst_result.total_weight, mst_result.num_edges);
+    #####:  133:            mst_result_free(&mst_result);
+        -:  134:        } else {
+    #####:  135:            snprintf(job->mst_result, sizeof(job->mst_result),
+        -:  136:                     "MST: Graph not connected or calculation failed");
+        -:  137:        }
+        -:  138:        
+    #####:  139:        printf("[Stage 1] Job %d MST completed: %s\n", job->job_id, job->mst_result);
+        -:  140:        
+        -:  141:        // Pass to next stage
+    #####:  142:        queue_push(&stage2_queue, job);
+        -:  143:    }
+        -:  144:    
+    #####:  145:    printf("[Stage 1] MST worker shutting down\n");
+    #####:  146:    return NULL;
+        -:  147:}
+        -:  148:
+        -:  149:// === Stage 2: MaxFlow Computation ===
+        1:  150:void* stage2_maxflow_worker(void *arg) {
+        1:  151:    printf("[Stage 2] MaxFlow worker started\n");
+        -:  152:    
+        1:  153:    while (!shutdown_flag) {
+        1:  154:        Job* job = queue_pop(&stage2_queue);
+    #####:  155:        if (!job) continue;
+        -:  156:        
+    #####:  157:        printf("[Stage 2] Processing Job %d - MaxFlow Algorithm\n", job->job_id);
+        -:  158:        
+        -:  159:        int flow_value;
+    #####:  160:        int success = graph_max_flow_default(job->graph, &flow_value);
+        -:  161:        
+    #####:  162:        if (success) {
+    #####:  163:            snprintf(job->maxflow_result, sizeof(job->maxflow_result),
+        -:  164:                     "MaxFlow: Value=%d (source=0, sink=%d)", 
+    #####:  165:                     flow_value, job->graph->n - 1);
+        -:  166:        } else {
+    #####:  167:            snprintf(job->maxflow_result, sizeof(job->maxflow_result),
+        -:  168:                     "MaxFlow: Calculation failed");
+        -:  169:        }
+        -:  170:        
+    #####:  171:        printf("[Stage 2] Job %d MaxFlow completed: %s\n", job->job_id, job->maxflow_result);
+        -:  172:        
+        -:  173:        // Pass to next stage
+    #####:  174:        queue_push(&stage3_queue, job);
+        -:  175:    }
+        -:  176:    
+    #####:  177:    printf("[Stage 2] MaxFlow worker shutting down\n");
+    #####:  178:    return NULL;
+        -:  179:}
+        -:  180:
+        -:  181:// === Stage 3: MaxClique Computation ===
+    #####:  182:void* stage3_maxclique_worker(void *arg) {
+    #####:  183:    printf("[Stage 3] MaxClique worker started\n");
+        -:  184:    
+    #####:  185:    while (!shutdown_flag) {
+    #####:  186:        Job* job = queue_pop(&stage3_queue);
+    #####:  187:        if (!job) continue;
+        -:  188:        
+    #####:  189:        printf("[Stage 3] Processing Job %d - MaxClique Algorithm\n", job->job_id);
+        -:  190:        
+        -:  191:        int clique_size;
+    #####:  192:        int success = graph_max_clique_size(job->graph, &clique_size);
+        -:  193:        
+    #####:  194:        if (success) {
+    #####:  195:            snprintf(job->maxclique_result, sizeof(job->maxclique_result),
+        -:  196:                     "MaxClique: Size=%d", clique_size);
+        -:  197:        } else {
+    #####:  198:            snprintf(job->maxclique_result, sizeof(job->maxclique_result),
+        -:  199:                     "MaxClique: Calculation failed");
+        -:  200:        }
+        -:  201:        
+    #####:  202:        printf("[Stage 3] Job %d MaxClique completed: %s\n", job->job_id, job->maxclique_result);
+        -:  203:        
+        -:  204:        // Pass to next stage
+    #####:  205:        queue_push(&stage4_queue, job);
+        -:  206:    }
+        -:  207:    
+    #####:  208:    printf("[Stage 3] MaxClique worker shutting down\n");
+    #####:  209:    return NULL;
+        -:  210:}
+        -:  211:
+        -:  212:// === Stage 4: CliqueCount Computation & Response ===
+    #####:  213:void* stage4_cliquecount_worker(void *arg) {
+    #####:  214:    printf("[Stage 4] CliqueCount worker started\n");
+        -:  215:    
+    #####:  216:    while (!shutdown_flag) {
+    #####:  217:        Job* job = queue_pop(&stage4_queue);
+    #####:  218:        if (!job) continue;
+        -:  219:        
+    #####:  220:        printf("[Stage 4] Processing Job %d - CliqueCount Algorithm\n", job->job_id);
+        -:  221:        
+        -:  222:        int total_cliques;
+    #####:  223:        int success = graph_total_clique_count(job->graph, &total_cliques);
+        -:  224:        
+    #####:  225:        if (success) {
+    #####:  226:            snprintf(job->cliquecount_result, sizeof(job->cliquecount_result),
+        -:  227:                     "CliqueCount: Total=%d", total_cliques);
+        -:  228:        } else {
+    #####:  229:            snprintf(job->cliquecount_result, sizeof(job->cliquecount_result),
+        -:  230:                     "CliqueCount: Calculation failed");
+        -:  231:        }
+        -:  232:        
+    #####:  233:        printf("[Stage 4] Job %d CliqueCount completed: %s\n", job->job_id, job->cliquecount_result);
+        -:  234:        
+        -:  235:        // Build final response
+    #####:  236:        time_t end_time = time(NULL);
+    #####:  237:        double processing_time = difftime(end_time, job->start_time);
+        -:  238:        
+    #####:  239:        snprintf(job->final_response, sizeof(job->final_response),
+        -:  240:                 "=== PIPELINE PROCESSING RESULTS ===\n"
+        -:  241:                 "Job ID: %d\n"
+        -:  242:                 "Graph: %d vertices\n"
+        -:  243:                 "Processing Time: %.2f seconds\n"
+        -:  244:                 "\n=== ALGORITHM RESULTS ===\n"
+        -:  245:                 "%s\n"
+        -:  246:                 "%s\n"
+        -:  247:                 "%s\n"
+        -:  248:                 "%s\n"
+        -:  249:                 "=====================================\n",
+    #####:  250:                 job->job_id, job->graph->n, processing_time,
+    #####:  251:                 job->mst_result, job->maxflow_result, 
+    #####:  252:                 job->maxclique_result, job->cliquecount_result);
+        -:  253:        
+        -:  254:        // Send response to client
+    #####:  255:        printf("[Stage 4] Sending response to client for Job %d\n", job->job_id);
+    #####:  256:        send(job->client_sock, job->final_response, strlen(job->final_response), 0);
+    #####:  257:        close(job->client_sock);
+        -:  258:        
+        -:  259:        // Cleanup
+    #####:  260:        printf("[Stage 4] Job %d completed and cleaned up\n", job->job_id);
+    #####:  261:        graph_destroy(job->graph);
+    #####:  262:        free(job);
+        -:  263:
+        -:  264:    }
+        -:  265:    
+    #####:  266:    printf("[Stage 4] CliqueCount worker shutting down\n");
+    #####:  267:    return NULL;
+        -:  268:}
+        -:  269:
+        -:  270:// === Client Request Handler ===
+    #####:  271:void* handle_client_request(void *arg) {
+    #####:  272:    int client_sock = *(int*)arg;
+    #####:  273:    free(arg);
+        -:  274:    
+    #####:  275:    printf("[Client] New client connection handler started\n");
+        -:  276:    
+        -:  277:    // Receive header: [seed][max_weight][vertices]
+        -:  278:    int header[3];
+    #####:  279:    int bytes_received = recv(client_sock, header, sizeof(header), 0);
+    #####:  280:    if (bytes_received != sizeof(header)) {
+    #####:  281:        printf("[Client] Failed to receive complete header\n");
+    #####:  282:        close(client_sock);
+    #####:  283:        return NULL;
+        -:  284:    }
+        -:  285:    
+    #####:  286:    int seed = header[0];
+    #####:  287:    int max_weight = header[1];
+    #####:  288:    int vertices = header[2];
+        -:  289:    
+    #####:  290:    printf("[Client] Header received - Seed: %d, MaxWeight: %d, Vertices: %d\n", 
+        -:  291:           seed, max_weight, vertices);
+        -:  292:    
+    #####:  293:    if (vertices <= 0 || vertices > 50) {
+    #####:  294:        printf("[Client] Invalid vertex count: %d\n", vertices);
+    #####:  295:        close(client_sock);
+    #####:  296:        return NULL;
+        -:  297:    }
+        -:  298:    
+        -:  299:    // Create graph
+    #####:  300:    Graph* graph = graph_create(vertices);
+    #####:  301:    if (!graph) {
+    #####:  302:        printf("[Client] Failed to create graph\n");
+    #####:  303:        close(client_sock);
+    #####:  304:        return NULL;
+        -:  305:    }
+        -:  306:    
+        -:  307:    // Receive edges: variable number of [u][v][w] triplets
+        -:  308:    int edges_buffer[MAX_EDGES][3];
+    #####:  309:    bytes_received = recv(client_sock, edges_buffer, sizeof(edges_buffer), 0);
+        -:  310:    
+    #####:  311:    if (bytes_received > 0) {
+    #####:  312:        int num_edges = bytes_received / (3 * sizeof(int));
+    #####:  313:        printf("[Client] Received %d edges\n", num_edges);
+        -:  314:        
+        -:  315:        // Add edges to graph
+    #####:  316:        for (int i = 0; i < num_edges; i++) {
+    #####:  317:            int u = edges_buffer[i][0];
+    #####:  318:            int v = edges_buffer[i][1];
+    #####:  319:            int weight = edges_buffer[i][2];
+        -:  320:            
+    #####:  321:            if (u >= 0 && u < vertices && v >= 0 && v < vertices && weight > 0) {
+    #####:  322:                graph_add_edge(graph, u, v);
+        -:  323:                // Update weights manually (assuming your graph structure supports it)
+    #####:  324:                for (EdgeNode* edge = graph->adj[u].head; edge; edge = edge->next) {
+    #####:  325:                    if (edge->to == v) edge->weight = weight;
+        -:  326:                }
+    #####:  327:                if (u != v) {
+    #####:  328:                    for (EdgeNode* edge = graph->adj[v].head; edge; edge = edge->next) {
+    #####:  329:                        if (edge->to == u) edge->weight = weight;
+        -:  330:                    }
+        -:  331:                }
+        -:  332:            }
+        -:  333:        }
+        -:  334:    }
+        -:  335:    
+        -:  336:    // Create job
+    #####:  337:    Job* job = malloc(sizeof(Job));
+    #####:  338:    memset(job, 0, sizeof(Job));
+        -:  339:    
+    #####:  340:    pthread_mutex_lock(&job_id_mutex);
+    #####:  341:    job->job_id = next_job_id++;
+    #####:  342:    pthread_mutex_unlock(&job_id_mutex);
+        -:  343:    
+    #####:  344:    job->graph = graph;
+    #####:  345:    job->client_sock = client_sock;
+    #####:  346:    job->start_time = time(NULL);
+        -:  347:    
+    #####:  348:    printf("[Client] Created Job %d, entering pipeline\n", job->job_id);
+        -:  349:    
+        -:  350:    // Enter pipeline at stage 1
+    #####:  351:    queue_push(&stage1_queue, job);
+        -:  352:    
+    #####:  353:    return NULL;
+        -:  354:}
+        -:  355:
+        -:  356:// === Signal Handler ===
+    #####:  357:void signal_handler(int sig) {
+    #####:  358:    printf("\n[Main] Received signal %d, shutting down pipeline...\n", sig);
+    #####:  359:    shutdown_flag = 1;
+        -:  360:    
+        -:  361:    // Wake up all workers
+    #####:  362:    pthread_cond_broadcast(&stage1_queue.not_empty);
+    #####:  363:    pthread_cond_broadcast(&stage2_queue.not_empty);
+    #####:  364:    pthread_cond_broadcast(&stage3_queue.not_empty);
+    #####:  365:    pthread_cond_broadcast(&stage4_queue.not_empty);
+    #####:  366:}
+        -:  367:
+        -:  368:// === Main Server ===
+        2:  369:int main() {
+        2:  370:    signal(SIGINT, signal_handler);
+        2:  371:    signal(SIGTERM, signal_handler);
+        -:  372:    
+        2:  373:    printf("=== Pipeline Pattern Graph Algorithm Server ===\n");
+        2:  374:    printf("Using 4-stage pipeline: MST → MaxFlow → MaxClique → CliqueCount\n");
+        2:  375:    printf("Listening on port %d\n", PORT);
+        -:  376:    
+        -:  377:    // Initialize pipeline queues
+        2:  378:    queue_init(&stage1_queue, "MST_Queue");
+        2:  379:    queue_init(&stage2_queue, "MaxFlow_Queue");
+        2:  380:    queue_init(&stage3_queue, "MaxClique_Queue");
+        2:  381:    queue_init(&stage4_queue, "CliqueCount_Queue");
+        -:  382:    
+        -:  383:    // Create pipeline worker threads
+        -:  384:    pthread_t stage1_thread, stage2_thread, stage3_thread, stage4_thread;
+        -:  385:    
+        2:  386:    pthread_create(&stage1_thread, NULL, stage1_mst_worker, NULL);
+        2:  387:    pthread_create(&stage2_thread, NULL, stage2_maxflow_worker, NULL);
+        2:  388:    pthread_create(&stage3_thread, NULL, stage3_maxclique_worker, NULL);
+        2:  389:    pthread_create(&stage4_thread, NULL, stage4_cliquecount_worker, NULL);
+        -:  390:    
+        2:  391:    printf("[Pipeline] All 4 stage workers started\n");
+        -:  392:    
+        -:  393:    // Create server socket
+        2:  394:    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+        2:  395:    if (server_fd < 0) {
+    #####:  396:        perror("socket");
+    #####:  397:        return 1;
+        -:  398:    }
+        -:  399:    
+        2:  400:    int opt = 1;
+        2:  401:    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        -:  402:    
+        2:  403:    struct sockaddr_in server_addr = {0};
+        2:  404:    server_addr.sin_family = AF_INET;
+        2:  405:    server_addr.sin_addr.s_addr = INADDR_ANY;
+        2:  406:    server_addr.sin_port = htons(PORT);
+        -:  407:    
+        2:  408:    if (bind(server_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        2:  409:        perror("bind");
+        2:  410:        close(server_fd);
+        2:  411:        return 1;
+        -:  412:    }
+        -:  413:    
+    #####:  414:    if (listen(server_fd, BACKLOG) < 0) {
+    #####:  415:        perror("listen");
+    #####:  416:        close(server_fd);
+    #####:  417:        return 1;
+        -:  418:    }
+        -:  419:    
+    #####:  420:    printf("[Main] Server ready - Pipeline pattern active!\n\n");
+        -:  421:    
+        -:  422:    // Accept client connections
+    #####:  423:    while (!shutdown_flag) {
+        -:  424:        struct sockaddr_in client_addr;
+    #####:  425:        socklen_t addr_len = sizeof(client_addr);
+        -:  426:        
+    #####:  427:        int client_sock = accept(server_fd, (struct sockaddr*)&client_addr, &addr_len);
+    #####:  428:        if (client_sock < 0) {
+    #####:  429:            if (!shutdown_flag) perror("accept");
+    #####:  430:            continue;
+        -:  431:        }
+        -:  432:        
+    #####:  433:        printf("[Main] New client connected: %s:%d\n", 
+    #####:  434:               inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+        -:  435:        
+        -:  436:        // Create thread to handle client
+    #####:  437:        int* client_sock_ptr = malloc(sizeof(int));
+    #####:  438:        *client_sock_ptr = client_sock;
+        -:  439:        
+        -:  440:        pthread_t client_thread;
+    #####:  441:        pthread_create(&client_thread, NULL, handle_client_request, client_sock_ptr);
+    #####:  442:        pthread_detach(client_thread);
+        -:  443:    }
+        -:  444:    
+        -:  445:    // Cleanup
+    #####:  446:    printf("[Main] Waiting for pipeline workers to finish...\n");
+    #####:  447:    pthread_join(stage1_thread, NULL);
+    #####:  448:    pthread_join(stage2_thread, NULL);
+    #####:  449:    pthread_join(stage3_thread, NULL);
+    #####:  450:    pthread_join(stage4_thread, NULL);
+        -:  451:    
+    #####:  452:    close(server_fd);
+    #####:  453:    printf("[Main] Pipeline server shutdown complete\n");
+        -:  454:    
+    #####:  455:    return 0;
+        -:  456:}

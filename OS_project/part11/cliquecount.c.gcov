@@ -1,0 +1,384 @@
+        -:    0:Source:../part7/cliquecount.c
+        -:    0:Graph:../part7/cliquecount.gcno
+        -:    0:Data:../part7/cliquecount.gcda
+        -:    0:Runs:2
+        -:    1:#include "cliquecount.h"
+        -:    2:#include <stdio.h>
+        -:    3:#include <stdlib.h>
+        -:    4:#include <string.h>
+        -:    5:
+        -:    6:/**
+        -:    7: * Build adjacency matrix from adjacency list for efficient clique operations.
+        -:    8: */
+    #####:    9:static int build_adjacency_matrix(const Graph* g, int** adj_matrix) {
+    #####:   10:    int n = g->n;
+        -:   11:    
+        -:   12:    // Initialize matrix to 0
+    #####:   13:    for (int i = 0; i < n; i++) {
+    #####:   14:        for (int j = 0; j < n; j++) {
+    #####:   15:            adj_matrix[i][j] = 0;
+        -:   16:        }
+        -:   17:    }
+        -:   18:    
+        -:   19:    // Fill adjacency matrix
+    #####:   20:    for (int u = 0; u < n; u++) {
+    #####:   21:        for (EdgeNode* edge = g->adj[u].head; edge; edge = edge->next) {
+    #####:   22:            int v = edge->to;
+    #####:   23:            if (u != v) { // Skip self-loops
+    #####:   24:                adj_matrix[u][v] = 1;
+        -:   25:            }
+        -:   26:        }
+        -:   27:    }
+        -:   28:    
+    #####:   29:    return 1;
+        -:   30:}
+        -:   31:
+        -:   32:/**
+        -:   33: * Check if vertex v is connected to all vertices in current clique.
+        -:   34: */
+    #####:   35:static int is_connected_to_all(int** adj_matrix, int v, int* current_clique, int clique_size) {
+    #####:   36:    for (int i = 0; i < clique_size; i++) {
+    #####:   37:        if (!adj_matrix[v][current_clique[i]]) {
+    #####:   38:            return 0;
+        -:   39:        }
+        -:   40:    }
+    #####:   41:    return 1;
+        -:   42:}
+        -:   43:
+        -:   44:/**
+        -:   45: * Recursive backtracking to count cliques of all sizes.
+        -:   46: */
+    #####:   47:static void count_cliques_recursive(int** adj_matrix, int n, int start_vertex,
+        -:   48:                                   int* current_clique, int current_size,
+        -:   49:                                   int* counts_by_size, int max_possible_size) {
+        -:   50:    
+        -:   51:    // Count current clique if size >= 1
+    #####:   52:    if (current_size > 0 && current_size <= max_possible_size) {
+    #####:   53:        counts_by_size[current_size]++;
+        -:   54:    }
+        -:   55:    
+        -:   56:    // Try adding each remaining vertex
+    #####:   57:    for (int v = start_vertex; v < n; v++) {
+        -:   58:        // Check if v is connected to all vertices in current clique
+    #####:   59:        if (is_connected_to_all(adj_matrix, v, current_clique, current_size)) {
+        -:   60:            // Add v to current clique
+    #####:   61:            current_clique[current_size] = v;
+        -:   62:            
+        -:   63:            // Recursive call
+    #####:   64:            count_cliques_recursive(adj_matrix, n, v + 1, 
+        -:   65:                                   current_clique, current_size + 1,
+        -:   66:                                   counts_by_size, max_possible_size);
+        -:   67:        }
+        -:   68:    }
+    #####:   69:}
+        -:   70:
+        -:   71:/**
+        -:   72: * Recursive backtracking to count cliques of specific size only.
+        -:   73: */
+    #####:   74:static void count_cliques_of_size_recursive(int** adj_matrix, int n, int start_vertex,
+        -:   75:                                           int* current_clique, int current_size,
+        -:   76:                                           int target_size, int* count) {
+        -:   77:    
+        -:   78:    // Found a clique of target size
+    #####:   79:    if (current_size == target_size) {
+    #####:   80:        (*count)++;
+    #####:   81:        return;
+        -:   82:    }
+        -:   83:    
+        -:   84:    // Pruning: if we can't reach target size with remaining vertices
+    #####:   85:    if (current_size + (n - start_vertex) < target_size) {
+    #####:   86:        return;
+        -:   87:    }
+        -:   88:    
+        -:   89:    // Try adding each remaining vertex
+    #####:   90:    for (int v = start_vertex; v < n; v++) {
+        -:   91:        // Check if v is connected to all vertices in current clique
+    #####:   92:        if (is_connected_to_all(adj_matrix, v, current_clique, current_size)) {
+        -:   93:            // Add v to current clique
+    #####:   94:            current_clique[current_size] = v;
+        -:   95:            
+        -:   96:            // Recursive call
+    #####:   97:            count_cliques_of_size_recursive(adj_matrix, n, v + 1, 
+        -:   98:                                           current_clique, current_size + 1,
+        -:   99:                                           target_size, count);
+        -:  100:        }
+        -:  101:    }
+        -:  102:}
+        -:  103:
+        -:  104:/**
+        -:  105: * Count all cliques in the graph.
+        -:  106: */
+    #####:  107:int graph_count_all_cliques(const Graph* g, CliqueCount_Result* result) {
+    #####:  108:    if (!g || !result) return 0;
+        -:  109:    
+    #####:  110:    int n = g->n;
+        -:  111:    
+        -:  112:    // Initialize result
+    #####:  113:    result->counts_by_size = NULL;
+    #####:  114:    result->max_size = 0;
+    #####:  115:    result->total_cliques = 0;
+    #####:  116:    result->is_valid = 0;
+        -:  117:    
+    #####:  118:    if (n == 0) {
+    #####:  119:        result->is_valid = 1;
+    #####:  120:        return 1;
+        -:  121:    }
+        -:  122:    
+        -:  123:    // Allocate counts array (index 0 unused, indices 1 to n for clique sizes)
+    #####:  124:    result->counts_by_size = (int*)calloc(n + 1, sizeof(int));
+    #####:  125:    if (!result->counts_by_size) return 0;
+        -:  126:    
+        -:  127:    // Allocate adjacency matrix
+    #####:  128:    int** adj_matrix = (int**)malloc(n * sizeof(int*));
+    #####:  129:    if (!adj_matrix) {
+    #####:  130:        free(result->counts_by_size);
+    #####:  131:        return 0;
+        -:  132:    }
+        -:  133:    
+    #####:  134:    for (int i = 0; i < n; i++) {
+    #####:  135:        adj_matrix[i] = (int*)malloc(n * sizeof(int));
+    #####:  136:        if (!adj_matrix[i]) {
+    #####:  137:            for (int j = 0; j < i; j++) free(adj_matrix[j]);
+    #####:  138:            free(adj_matrix);
+    #####:  139:            free(result->counts_by_size);
+    #####:  140:            return 0;
+        -:  141:        }
+        -:  142:    }
+        -:  143:    
+        -:  144:    // Build adjacency matrix
+    #####:  145:    build_adjacency_matrix(g, adj_matrix);
+        -:  146:    
+        -:  147:    // Allocate working array
+    #####:  148:    int* current_clique = (int*)malloc(n * sizeof(int));
+    #####:  149:    if (!current_clique) {
+    #####:  150:        for (int i = 0; i < n; i++) free(adj_matrix[i]);
+    #####:  151:        free(adj_matrix);
+    #####:  152:        free(result->counts_by_size);
+    #####:  153:        return 0;
+        -:  154:    }
+        -:  155:    
+        -:  156:    // Count cliques starting from each vertex
+    #####:  157:    count_cliques_recursive(adj_matrix, n, 0, current_clique, 0, result->counts_by_size, n);
+        -:  158:    
+        -:  159:    // Calculate total and find max size
+    #####:  160:    int total = 0;
+    #####:  161:    int max_size = 0;
+    #####:  162:    for (int i = 1; i <= n; i++) {
+    #####:  163:        if (result->counts_by_size[i] > 0) {
+    #####:  164:            total += result->counts_by_size[i];
+    #####:  165:            max_size = i;
+        -:  166:        }
+        -:  167:    }
+        -:  168:    
+    #####:  169:    result->total_cliques = total;
+    #####:  170:    result->max_size = max_size;
+    #####:  171:    result->is_valid = 1;
+        -:  172:    
+        -:  173:    // Cleanup
+    #####:  174:    free(current_clique);
+    #####:  175:    for (int i = 0; i < n; i++) free(adj_matrix[i]);
+    #####:  176:    free(adj_matrix);
+        -:  177:    
+    #####:  178:    return 1;
+        -:  179:}
+        -:  180:
+        -:  181:/**
+        -:  182: * Count cliques of a specific size.
+        -:  183: */
+    #####:  184:int graph_count_cliques_of_size(const Graph* g, int clique_size, int* count) {
+    #####:  185:    if (!g || !count || clique_size < 1) return 0;
+        -:  186:    
+    #####:  187:    int n = g->n;
+    #####:  188:    *count = 0;
+        -:  189:    
+    #####:  190:    if (clique_size > n) return 1; // No cliques larger than number of vertices
+        -:  191:    
+        -:  192:    // Allocate adjacency matrix
+    #####:  193:    int** adj_matrix = (int**)malloc(n * sizeof(int*));
+    #####:  194:    if (!adj_matrix) return 0;
+        -:  195:    
+    #####:  196:    for (int i = 0; i < n; i++) {
+    #####:  197:        adj_matrix[i] = (int*)malloc(n * sizeof(int));
+    #####:  198:        if (!adj_matrix[i]) {
+    #####:  199:            for (int j = 0; j < i; j++) free(adj_matrix[j]);
+    #####:  200:            free(adj_matrix);
+    #####:  201:            return 0;
+        -:  202:        }
+        -:  203:    }
+        -:  204:    
+        -:  205:    // Build adjacency matrix
+    #####:  206:    build_adjacency_matrix(g, adj_matrix);
+        -:  207:    
+        -:  208:    // Allocate working array
+    #####:  209:    int* current_clique = (int*)malloc(n * sizeof(int));
+    #####:  210:    if (!current_clique) {
+    #####:  211:        for (int i = 0; i < n; i++) free(adj_matrix[i]);
+    #####:  212:        free(adj_matrix);
+    #####:  213:        return 0;
+        -:  214:    }
+        -:  215:    
+        -:  216:    // Count cliques of specific size
+    #####:  217:    count_cliques_of_size_recursive(adj_matrix, n, 0, current_clique, 0, clique_size, count);
+        -:  218:    
+        -:  219:    // Cleanup
+    #####:  220:    free(current_clique);
+    #####:  221:    for (int i = 0; i < n; i++) free(adj_matrix[i]);
+    #####:  222:    free(adj_matrix);
+        -:  223:    
+    #####:  224:    return 1;
+        -:  225:}
+        -:  226:
+        -:  227:/**
+        -:  228: * Print clique count result in a formatted way.
+        -:  229: */
+    #####:  230:void graph_print_clique_counts(const Graph* g) {
+    #####:  231:    if (!g) {
+    #####:  232:        printf("Error: NULL graph\n");
+    #####:  233:        return;
+        -:  234:    }
+        -:  235:    
+        -:  236:    CliqueCount_Result result;
+    #####:  237:    if (!graph_count_all_cliques(g, &result)) {
+    #####:  238:        printf("Error: Failed to count cliques\n");
+    #####:  239:        return;
+        -:  240:    }
+        -:  241:    
+    #####:  242:    if (!result.is_valid) {
+    #####:  243:        printf("Invalid result\n");
+    #####:  244:        clique_count_result_free(&result);
+    #####:  245:        return;
+        -:  246:    }
+        -:  247:    
+    #####:  248:    printf("Clique Count Analysis:\n");
+    #####:  249:    printf("Total cliques: %d\n", result.total_cliques);
+    #####:  250:    printf("Maximum clique size: %d\n", result.max_size);
+    #####:  251:    printf("\nBreakdown by size:\n");
+        -:  252:    
+    #####:  253:    for (int i = 1; i <= result.max_size; i++) {
+    #####:  254:        if (result.counts_by_size[i] > 0) {
+    #####:  255:            printf("  Size %d: %d cliques\n", i, result.counts_by_size[i]);
+        -:  256:        }
+        -:  257:    }
+        -:  258:    
+    #####:  259:    if (result.total_cliques == 0) {
+    #####:  260:        printf("  No cliques found (isolated vertices only)\n");
+        -:  261:    }
+        -:  262:    
+    #####:  263:    clique_count_result_free(&result);
+        -:  264:}
+        -:  265:
+        -:  266:/**
+        -:  267: * Free clique count result memory.
+        -:  268: */
+    #####:  269:void clique_count_result_free(CliqueCount_Result* result) {
+    #####:  270:    if (result && result->counts_by_size) {
+    #####:  271:        free(result->counts_by_size);
+    #####:  272:        result->counts_by_size = NULL;
+    #####:  273:        result->max_size = 0;
+    #####:  274:        result->total_cliques = 0;
+    #####:  275:        result->is_valid = 0;
+        -:  276:    }
+    #####:  277:}
+        -:  278:
+        -:  279:/**
+        -:  280: * Count triangles (3-cliques) in the graph - optimized version.
+        -:  281: */
+    #####:  282:int graph_count_triangles(const Graph* g, int* triangle_count) {
+    #####:  283:    if (!g || !triangle_count) return 0;
+        -:  284:    
+    #####:  285:    int n = g->n;
+    #####:  286:    *triangle_count = 0;
+        -:  287:    
+    #####:  288:    if (n < 3) return 1; // Need at least 3 vertices for triangle
+        -:  289:    
+        -:  290:    // Allocate adjacency matrix
+    #####:  291:    int** adj_matrix = (int**)malloc(n * sizeof(int*));
+    #####:  292:    if (!adj_matrix) return 0;
+        -:  293:    
+    #####:  294:    for (int i = 0; i < n; i++) {
+    #####:  295:        adj_matrix[i] = (int*)malloc(n * sizeof(int));
+    #####:  296:        if (!adj_matrix[i]) {
+    #####:  297:            for (int j = 0; j < i; j++) free(adj_matrix[j]);
+    #####:  298:            free(adj_matrix);
+    #####:  299:            return 0;
+        -:  300:        }
+        -:  301:    }
+        -:  302:    
+        -:  303:    // Build adjacency matrix
+    #####:  304:    build_adjacency_matrix(g, adj_matrix);
+        -:  305:    
+        -:  306:    // Count triangles: for each triple (i,j,k) where i < j < k
+    #####:  307:    int count = 0;
+    #####:  308:    for (int i = 0; i < n; i++) {
+    #####:  309:        for (int j = i + 1; j < n; j++) {
+    #####:  310:            if (adj_matrix[i][j]) {
+    #####:  311:                for (int k = j + 1; k < n; k++) {
+    #####:  312:                    if (adj_matrix[i][k] && adj_matrix[j][k]) {
+    #####:  313:                        count++;
+        -:  314:                    }
+        -:  315:                }
+        -:  316:            }
+        -:  317:        }
+        -:  318:    }
+        -:  319:    
+    #####:  320:    *triangle_count = count;
+        -:  321:    
+        -:  322:    // Cleanup
+    #####:  323:    for (int i = 0; i < n; i++) free(adj_matrix[i]);
+    #####:  324:    free(adj_matrix);
+        -:  325:    
+    #####:  326:    return 1;
+        -:  327:}
+        -:  328:
+        -:  329:/**
+        -:  330: * Count edges (2-cliques) in the graph.
+        -:  331: */
+    #####:  332:int graph_count_edges(const Graph* g, int* edge_count) {
+    #####:  333:    if (!g || !edge_count) return 0;
+        -:  334:    
+    #####:  335:    *edge_count = 0;
+        -:  336:    
+        -:  337:    // Count edges by traversing adjacency lists
+    #####:  338:    for (int u = 0; u < g->n; u++) {
+    #####:  339:        for (EdgeNode* edge = g->adj[u].head; edge; edge = edge->next) {
+    #####:  340:            int v = edge->to;
+    #####:  341:            if (u < v) { // Count each undirected edge only once
+    #####:  342:                (*edge_count)++;
+        -:  343:            }
+        -:  344:        }
+        -:  345:    }
+        -:  346:    
+    #####:  347:    return 1;
+        -:  348:}
+        -:  349:
+        -:  350:/**
+        -:  351: * Get total number of cliques of all sizes.
+        -:  352: */
+    #####:  353:int graph_total_clique_count(const Graph* g, int* total_count) {
+    #####:  354:    if (!g || !total_count) return 0;
+        -:  355:    
+        -:  356:    CliqueCount_Result result;
+    #####:  357:    if (!graph_count_all_cliques(g, &result)) {
+    #####:  358:        return 0;
+        -:  359:    }
+        -:  360:    
+    #####:  361:    if (!result.is_valid) {
+    #####:  362:        clique_count_result_free(&result);
+    #####:  363:        return 0;
+        -:  364:    }
+        -:  365:    
+    #####:  366:    *total_count = result.total_cliques;
+    #####:  367:    clique_count_result_free(&result);
+    #####:  368:    return 1;
+        -:  369:}
+        -:  370:
+        -:  371:/**
+        -:  372: * Check if the graph has any cliques of a given size.
+        -:  373: */
+    #####:  374:int graph_has_cliques_of_size(const Graph* g, int clique_size) {
+        -:  375:    int count;
+    #####:  376:    if (!graph_count_cliques_of_size(g, clique_size, &count)) {
+    #####:  377:        return 0;
+        -:  378:    }
+    #####:  379:    return count > 0;
+        -:  380:}

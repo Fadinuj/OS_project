@@ -1,0 +1,358 @@
+        -:    0:Source:../part7/graph.c
+        -:    0:Graph:../part7/graph.gcno
+        -:    0:Data:../part7/graph.gcda
+        -:    0:Runs:2
+        -:    1:#include "graph.h"
+        -:    2:#include <stdio.h>
+        -:    3:#include <unistd.h> 
+        -:    4:#include <stdlib.h>
+        -:    5:
+        -:    6:/**
+        -:    7: * Check if vertex index v is within [0, g->n).
+        -:    8: */
+    #####:    9:static int in_bounds(const Graph* g, int v) {
+    #####:   10:    return (g != NULL && v >= 0 && v < g->n);
+        -:   11:}
+        -:   12:
+        -:   13:/**
+        -:   14: * Count how many times v appears in u's adjacency list.
+        -:   15: */
+    #####:   16:static int count_neighbor(const Graph* g, int u, int v){
+    #####:   17:    int c = 0;
+    #####:   18:    for (EdgeNode* e = g->adj[u].head; e; e = e->next)
+    #####:   19:        if (e->to == v) c++;
+    #####:   20:    return c;
+        -:   21:}
+        -:   22:
+        -:   23:/**
+        -:   24: * Simple-graph duplicate check for undirected edge (u--v).
+        -:   25: */
+    #####:   26:static int edge_exists_simple(const Graph* g, int u, int v){
+    #####:   27:    if (u == v) return count_neighbor(g, u, u) >= 2;
+    #####:   28:    return count_neighbor(g, u, v) >= 1;
+        -:   29:}
+        -:   30:
+        -:   31:/**
+        -:   32: * Create a graph with n vertices and no edges.
+        -:   33: */
+    #####:   34:Graph* graph_create(int n) {
+    #####:   35:    if (n <= 0) return NULL;
+        -:   36:
+    #####:   37:    Graph* g = (Graph*)malloc(sizeof(Graph));
+    #####:   38:    if (!g) return NULL;
+        -:   39:
+    #####:   40:    g->n = n;
+    #####:   41:    g->adj = (Vertex*)calloc((size_t)n, sizeof(Vertex));
+    #####:   42:    if (!g->adj) { free(g); return NULL; }
+        -:   43:
+    #####:   44:    return g;
+        -:   45:}
+        -:   46:
+        -:   47:/**
+        -:   48: * Destroy a graph and free all associated memory.
+        -:   49: */
+    #####:   50:void graph_destroy(Graph* g) {
+    #####:   51:    if (!g) return;
+    #####:   52:    for (int i = 0; i < g->n; ++i) {
+    #####:   53:        EdgeNode* cur = g->adj[i].head;
+    #####:   54:        while (cur) {
+    #####:   55:            EdgeNode* tmp = cur;
+    #####:   56:            cur = cur->next;
+    #####:   57:            free(tmp);
+        -:   58:        }
+        -:   59:    }
+    #####:   60:    free(g->adj);
+    #####:   61:    free(g);
+        -:   62:}
+        -:   63:
+        -:   64:/**
+        -:   65: * Add an undirected edge u--v with default weight 1.
+        -:   66: * Backward compatible with existing code.
+        -:   67: */
+    #####:   68:int graph_add_edge(Graph* g, int u, int v) {
+    #####:   69:    return graph_add_weighted_edge(g, u, v, 1);
+        -:   70:}
+        -:   71:
+        -:   72:/**
+        -:   73: * Add an undirected edge u--v with specified weight.
+        -:   74: */
+    #####:   75:int graph_add_weighted_edge(Graph* g, int u, int v, int weight) {
+    #####:   76:    if (!in_bounds(g, u) || !in_bounds(g, v)) return -1;
+        -:   77:
+    #####:   78:    if (edge_exists_simple(g, u, v)) return -3;
+        -:   79:
+    #####:   80:    if (u == v) {
+        -:   81:        // Self-loop: add two entries with same weight
+    #####:   82:        EdgeNode* e1 = (EdgeNode*)malloc(sizeof(EdgeNode));
+    #####:   83:        EdgeNode* e2 = (EdgeNode*)malloc(sizeof(EdgeNode));
+    #####:   84:        if (!e1 || !e2) { free(e1); free(e2); return -2; }
+        -:   85:        
+    #####:   86:        e1->to = u;
+    #####:   87:        e1->weight = weight;
+    #####:   88:        e1->next = g->adj[u].head;
+        -:   89:        
+    #####:   90:        e2->to = u;
+    #####:   91:        e2->weight = weight;
+    #####:   92:        e2->next = e1;
+        -:   93:        
+    #####:   94:        g->adj[u].head = e2;
+    #####:   95:        return 0;
+        -:   96:    } else {
+        -:   97:        // Regular edge: add two directed edges
+    #####:   98:        EdgeNode* e1 = (EdgeNode*)malloc(sizeof(EdgeNode));
+    #####:   99:        EdgeNode* e2 = (EdgeNode*)malloc(sizeof(EdgeNode));
+    #####:  100:        if (!e1 || !e2) { free(e1); free(e2); return -2; }
+        -:  101:
+    #####:  102:        e1->to = v;
+    #####:  103:        e1->weight = weight;
+    #####:  104:        e1->next = g->adj[u].head;
+        -:  105:        
+    #####:  106:        e2->to = u;
+    #####:  107:        e2->weight = weight;
+    #####:  108:        e2->next = g->adj[v].head;
+        -:  109:
+    #####:  110:        g->adj[u].head = e1;
+    #####:  111:        g->adj[v].head = e2;
+    #####:  112:        return 0;
+        -:  113:    }
+        -:  114:}
+        -:  115:
+        -:  116:/**
+        -:  117: * Get weight of edge between u and v.
+        -:  118: */
+    #####:  119:int graph_get_edge_weight(const Graph* g, int u, int v) {
+    #####:  120:    if (!in_bounds(g, u) || !in_bounds(g, v)) return 0;
+        -:  121:    
+    #####:  122:    for (EdgeNode* e = g->adj[u].head; e; e = e->next) {
+    #####:  123:        if (e->to == v) {
+    #####:  124:            return e->weight;
+        -:  125:        }
+        -:  126:    }
+    #####:  127:    return 0; // Edge doesn't exist
+        -:  128:}
+        -:  129:
+        -:  130:/**
+        -:  131: * Check if graph has any weighted edges (weight != 1).
+        -:  132: */
+    #####:  133:static int has_weights(const Graph* g) {
+    #####:  134:    if (!g) return 0;
+        -:  135:    
+    #####:  136:    for (int i = 0; i < g->n; i++) {
+    #####:  137:        for (EdgeNode* e = g->adj[i].head; e; e = e->next) {
+    #####:  138:            if (e->weight != 1) return 1;
+        -:  139:        }
+        -:  140:    }
+    #####:  141:    return 0;
+        -:  142:}
+        -:  143:
+        -:  144:/**
+        -:  145: * Print adjacency lists to stdout with optional weights.
+        -:  146: */
+    #####:  147:void graph_print(const Graph* g) {
+    #####:  148:    if (!g) return;
+        -:  149:    
+    #####:  150:    int show_weights = has_weights(g);
+        -:  151:    
+    #####:  152:    for (int i = 0; i < g->n; ++i) {
+    #####:  153:        printf("%d:", i);
+    #####:  154:        for (EdgeNode* cur = g->adj[i].head; cur; cur = cur->next) {
+    #####:  155:            if (show_weights) {
+    #####:  156:                printf(" %d(w:%d)", cur->to, cur->weight);
+        -:  157:            } else {
+    #####:  158:                printf(" %d", cur->to);
+        -:  159:            }
+        -:  160:        }
+    #####:  161:        printf("\n");
+        -:  162:    }
+        -:  163:}
+        -:  164:
+        -:  165:/* 
+        -:  166: * Rest of the file remains exactly the same - all the Euler circuit code,
+        -:  167: * Vec implementation, EdgeView, etc. - since they don't need to know about weights
+        -:  168: */
+        -:  169:
+        -:  170:/**
+        -:  171: * Vec - tiny dynamic array implementation
+        -:  172: */
+        -:  173:typedef struct { int *a; int n, cap; } Vec;
+    #####:  174:static int  v_reserve(Vec* v, int cap){ if (cap<=v->cap) return 0; int c=v->cap? v->cap*2:16; if(c<cap) c=cap; int*na=(int*)realloc(v->a, sizeof(int)*c); if(!na) return -1; v->a=na; v->cap=c; return 0; }
+    #####:  175:static int  v_push(Vec* v, int x){ if(v_reserve(v,v->n+1)) return -1; v->a[v->n++]=x; return 0; }
+    #####:  176:static int  v_pop (Vec* v){ return v->a[--v->n]; }
+    #####:  177:static int  v_back(const Vec* v){ return v->a[v->n-1]; }
+    #####:  178:static void v_free(Vec* v){ free(v->a); v->a=NULL; v->n=v->cap=0; }
+    #####:  179:static void v_reverse(Vec* v){ for(int i=0,j=v->n-1;i<j;i++,j--){ int t=v->a[i]; v->a[i]=v->a[j]; v->a[j]=t; } }
+        -:  180:
+        -:  181:/**
+        -:  182: * EdgeView for Hierholzer's algorithm
+        -:  183: */
+        -:  184:typedef struct { int u, v; } UEEdge;
+        -:  185:typedef struct {
+        -:  186:    UEEdge* edges; int m;  
+        -:  187:    Vec* incid;   int n;   
+        -:  188:} EdgeView;
+        -:  189:
+    #####:  190:static void ev_free(EdgeView* ev){
+    #####:  191:    if(!ev) return;
+    #####:  192:    for(int i=0;i<ev->n;i++) v_free(&ev->incid[i]);
+    #####:  193:    free(ev->incid);
+    #####:  194:    free(ev->edges);
+        -:  195:}
+        -:  196:
+    #####:  197:static int degree_vertex_adj(const Graph* g, int v){
+    #####:  198:    int d=0; for(EdgeNode* e=g->adj[v].head; e; e=e->next) d++;
+    #####:  199:    return d; 
+        -:  200:}
+        -:  201:
+    #####:  202:static int is_connected_ignore_isolated(const Graph* g){
+    #####:  203:    int start = -1;
+    #####:  204:    for(int i=0;i<g->n;i++)
+    #####:  205:        if (degree_vertex_adj(g,i)>0) { start=i; break; }
+    #####:  206:    if (start==-1) return 1;
+        -:  207:
+    #####:  208:    char* vis = (char*)calloc((size_t)g->n, 1);
+    #####:  209:    if(!vis) return 0;
+    #####:  210:    Vec st={0};
+    #####:  211:    (void)v_push(&st, start); vis[start]=1;
+        -:  212:
+    #####:  213:    while(st.n){
+    #####:  214:        int u = v_pop(&st);
+    #####:  215:        for(EdgeNode* e=g->adj[u].head; e; e=e->next){
+    #####:  216:            int v = e->to;
+    #####:  217:            if(!vis[v]){ vis[v]=1; (void)v_push(&st, v); }
+        -:  218:        }
+        -:  219:    }
+    #####:  220:    int ok=1;
+    #####:  221:    for(int i=0;i<g->n;i++)
+    #####:  222:        if (degree_vertex_adj(g,i)>0 && !vis[i]) { ok=0; break; }
+        -:  223:
+    #####:  224:    v_free(&st); free(vis);
+    #####:  225:    return ok;
+        -:  226:}
+        -:  227:
+    #####:  228:static int build_edge_view(const Graph* g, EdgeView* ev){
+    #####:  229:    ev->n = g->n;
+    #####:  230:    ev->edges = NULL; ev->m = 0;
+    #####:  231:    ev->incid = (Vec*)calloc((size_t)ev->n, sizeof(Vec));
+    #####:  232:    if(!ev->incid) return -1;
+        -:  233:
+    #####:  234:    long long sumdeg = 0;
+    #####:  235:    for(int u=0; u<g->n; ++u)
+    #####:  236:        for(EdgeNode* e=g->adj[u].head; e; e=e->next) sumdeg++;
+    #####:  237:    int m_est = (int)(sumdeg/2 + 1);
+        -:  238:
+    #####:  239:    ev->edges = (UEEdge*)malloc(sizeof(UEEdge) * (size_t)m_est);
+    #####:  240:    if(!ev->edges){ ev_free(ev); return -1; }
+        -:  241:
+    #####:  242:    int* loop_half = (int*)calloc((size_t)ev->n, sizeof(int));
+    #####:  243:    if(!loop_half){ ev_free(ev); return -1; }
+        -:  244:
+    #####:  245:    for(int u=0; u<g->n; ++u){
+    #####:  246:        for(EdgeNode* e=g->adj[u].head; e; e=e->next){
+    #####:  247:            int v = e->to;
+        -:  248:
+    #####:  249:            if (u == v) {
+    #####:  250:                if ((++loop_half[u] & 1) == 0) {
+    #####:  251:                    if(ev->m == m_est){
+    #####:  252:                        m_est = m_est ? m_est*2 : 16;
+    #####:  253:                        UEEdge* ne = (UEEdge*)realloc(ev->edges, sizeof(UEEdge)*(size_t)m_est);
+    #####:  254:                        if(!ne){ 
+    #####:  255:                            free(loop_half);
+    #####:  256:                             ev_free(ev); 
+    #####:  257:                             return -1; 
+        -:  258:                        }
+    #####:  259:                        ev->edges = ne;
+        -:  260:                    }
+    #####:  261:                    ev->edges[ev->m] = (UEEdge){u,u};
+    #####:  262:                    if (v_push(&ev->incid[u], ev->m) || v_push(&ev->incid[u], ev->m)) {
+    #####:  263:                        free(loop_half); ev_free(ev); return -1;
+        -:  264:                    }
+    #####:  265:                    ev->m++;
+        -:  266:                }
+    #####:  267:            } else if (u < v) {
+    #####:  268:                if(ev->m == m_est){
+    #####:  269:                    m_est = m_est ? m_est*2 : 16;
+    #####:  270:                    UEEdge* ne = (UEEdge*)realloc(ev->edges, sizeof(UEEdge)*(size_t)m_est);
+    #####:  271:                    if(!ne){ free(loop_half); ev_free(ev); return -1; }
+    #####:  272:                    ev->edges = ne;
+        -:  273:                }
+    #####:  274:                ev->edges[ev->m] = (UEEdge){u,v};
+    #####:  275:                if (v_push(&ev->incid[u], ev->m) || v_push(&ev->incid[v], ev->m)) {
+    #####:  276:                    free(loop_half); ev_free(ev); return -1;
+        -:  277:                }
+    #####:  278:                ev->m++;
+        -:  279:            }
+        -:  280:        }
+        -:  281:    }
+    #####:  282:    free(loop_half);
+    #####:  283:    return 0;
+        -:  284:}
+        -:  285:
+    #####:  286:int graph_has_euler_circuit(const Graph* g){
+    #####:  287:    if (!g) return 0;
+        -:  288:
+    #####:  289:    if (!is_connected_ignore_isolated(g)) return 0;
+        -:  290:
+    #####:  291:    long long sumdeg = 0;
+    #####:  292:    for (int i = 0; i < g->n; ++i){
+    #####:  293:        int d = degree_vertex_adj(g, i);
+    #####:  294:        if (d % 2 != 0) return 0;
+    #####:  295:        sumdeg += d;
+        -:  296:    }
+    #####:  297:    if (sumdeg == 0) return 0; 
+        -:  298:
+    #####:  299:    return 1;
+        -:  300:}
+        -:  301:
+    #####:  302:int graph_find_euler_circuit(const Graph* g, int** out_cycle, int* out_len){
+    #####:  303:    if (!g || !out_cycle || !out_len) return 0;
+    #####:  304:    *out_cycle = NULL; *out_len = 0;
+        -:  305:
+    #####:  306:    if (!graph_has_euler_circuit(g)) return 0;
+        -:  307:
+    #####:  308:    EdgeView ev; if (build_edge_view(g, &ev)) return 0;
+        -:  309:
+    #####:  310:    int start = -1;
+    #####:  311:    for (int i = 0; i < ev.n; ++i){
+    #####:  312:        if (ev.incid[i].n > 0) { start = i; break; }
+        -:  313:    }
+    #####:  314:    if (start == -1) { ev_free(&ev); return 0; }
+        -:  315:
+    #####:  316:    int* used = (int*)calloc((size_t)ev.m, sizeof(int));
+    #####:  317:    int* it   = (int*)calloc((size_t)ev.n, sizeof(int));
+    #####:  318:    if(!used || !it){ free(used); free(it); ev_free(&ev); return 0; }
+        -:  319:
+    #####:  320:    Vec stack={0}, path={0};
+    #####:  321:    (void)v_push(&stack, start);
+        -:  322:
+    #####:  323:    while (stack.n){
+    #####:  324:        int u = v_back(&stack);
+        -:  325:
+    #####:  326:        while (it[u] < ev.incid[u].n && used[ ev.incid[u].a[it[u]] ]) it[u]++;
+        -:  327:
+    #####:  328:        if (it[u] == ev.incid[u].n){
+    #####:  329:            (void)v_push(&path, u);
+    #####:  330:            (void)v_pop(&stack);
+        -:  331:        } else {
+    #####:  332:            int ei = ev.incid[u].a[it[u]++];
+    #####:  333:            if (!used[ei]) {
+    #####:  334:                used[ei] = 1;
+    #####:  335:                int a = ev.edges[ei].u, b = ev.edges[ei].v;
+    #####:  336:                int v = (u==a) ? b : a;
+    #####:  337:                (void)v_push(&stack, v);
+        -:  338:            }
+        -:  339:        }
+        -:  340:    }
+        -:  341:
+    #####:  342:    v_reverse(&path);
+        -:  343:
+    #####:  344:    free(used); free(it);
+    #####:  345:    ev_free(&ev);
+    #####:  346:    v_free(&stack);
+        -:  347:
+    #####:  348:    if (path.n < 1) { v_free(&path); return 0; }
+        -:  349:
+    #####:  350:    *out_cycle = path.a; 
+    #####:  351:    *out_len   = path.n;
+        -:  352:
+    #####:  353:    return 1;
+        -:  354:}
